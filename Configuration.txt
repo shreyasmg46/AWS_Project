@@ -75,6 +75,19 @@ sudo firewall-cmd --zone=public --add-port=3306/tcp --permanent
 sudo firewall-cmd --reload
 sudo systemctl restart mariadb
 
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+To export the .sql file from the database
+
+mysqldump -u root -p  database name > dump.sql
+
+To import the .sql file to another database
+
+1. Create a new database 
+2. Run,
+mysql -u <user_name> -p (new database name now created) < dump.sql
+		   [Name in the above may vary]
+
 ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 2. Installation of Memcache package (Amazon-linux machine)
