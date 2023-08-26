@@ -1,0 +1,235 @@
+Multi-Tier Application deploying on Cloud Platform (AWS)
+
+------------------------------Flow of Execution------------------------------
+
+1. Login to AWS Account.
+2. Create a keypair (optional).
+3. Create a dedicated security groups for all different services.
+4. Launch instances manually or with userdata (bash script) for different packages.
+5. Update the IP address of each instances in Route53 by creating private hosted zone.
+6. Build the application from source code withn the help of Apache maven (locally or in AWS).
+7. Create a new bucket in S3 with the unique name and upload the artifact to S3 bucket.
+8. Copy the Artifact from bucket to default path of tomcat instance.
+9. Verify the application
+
+------------------------------Security Group-------------------------------------------------------------
+
+Create a Security Group
+SG for MariaDB / Memcache / RabbitMQ (Backend service)
+ Enable - 22, 8080, 11211(Mem), 5678(RMQ) and route all traffic to the same sg(internal communication).
+
+SG for Tomcat Application (Web application)
+ Enable - 22, 8080.
+
+-----------------------------Services used in AWS---------------------------------------------------------
+
+1. EC2
+2. S3
+3. Route53
+4. VPC (Optional)
+
+------------------------------Packages need to be installed on EC2----------------------------------------
+
+1. Mariadb / MySQL package
+2. Memcache
+3. RabbitMQ
+4. Apache Tomcat
+     
+1. Installation of Mariadb package (Amazon-linux machine)
+	
+Fill the below commands in user data during creation of EC2-instance / Manually run as a command
+
+#!/bin/bash
+DATABASE_PASS='admin123'
+sudo yum update -y
+sudo yum install epel-release -y
+sudo yum install git zip unzip -y
+sudo yum install mariadb-server -y
+
+# starting & enabling mariadb-server
+sudo systemctl start mariadb
+sudo systemctl enable mariadb
+cd /tmp/
+git clone -b main https://github.com/hkhcoder/vprofile-project.git
+#restore the dump file for the application
+sudo mysqladmin -u root password "$DATABASE_PASS"
+sudo mysql -u root -p"$DATABASE_PASS" -e "UPDATE mysql.user SET Password=PASSWORD('$DATABASE_PASS') WHERE User='root'"
+sudo mysql -u root -p"$DATABASE_PASS" -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1')"
+sudo mysql -u root -p"$DATABASE_PASS" -e "DELETE FROM mysql.user WHERE User=''"
+sudo mysql -u root -p"$DATABASE_PASS" -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%'"
+sudo mysql -u root -p"$DATABASE_PASS" -e "FLUSH PRIVILEGES"
+sudo mysql -u root -p"$DATABASE_PASS" -e "create database accounts"
+sudo mysql -u root -p"$DATABASE_PASS" -e "grant all privileges on accounts.* TO 'admin'@'localhost' identified by 'admin123'"
+sudo mysql -u root -p"$DATABASE_PASS" -e "grant all privileges on accounts.* TO 'admin'@'%' identified by 'admin123'"
+sudo mysql -u root -p"$DATABASE_PASS" accounts < /tmp/vprofile-project/src/main/resources/db_backup.sql
+sudo mysql -u root -p"$DATABASE_PASS" -e "FLUSH PRIVILEGES"
+
+# Restart mariadb-server
+sudo systemctl restart mariadb
+
+#starting the firewall and allowing the mariadb to access from port no. 3306
+sudo systemctl start firewalld
+sudo systemctl enable firewalld
+sudo firewall-cmd --get-active-zones
+sudo firewall-cmd --zone=public --add-port=3306/tcp --permanent
+sudo firewall-cmd --reload
+sudo systemctl restart mariadb
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+2. Installation of Memcache package (Amazon-linux machine)
+
+Memcache - Memcached is an easy-to-use, high-performance, in-memory data store. It helps by reducing the load on backend servers and improves application performance.
+
+Fill the below commands in user data during creation of EC2-instance / Manually run as a command
+
+#!/bin/bash
+sudo amazon-linux-extras install epel
+sudo yum install memcached -y
+sudo systemctl start memcached
+sudo systemctl enable memcached
+sudo systemctl status memcached
+sed -i 's/127.0.0.1/0.0.0.0/g' /etc/sysconfig/memcached
+sudo systemctl restart memcached
+firewall-cmd --add-port=11211/tcp
+firewall-cmd --runtime-to-permanent
+firewall-cmd --add-port=11111/udp
+firewall-cmd --runtime-to-permanent
+sudo memcached -p 11211 -U 11111 -u memcached -d
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+3. Installation of RabbitMQ Server (Amazon-linux machine)
+
+RabbitMQ - RabbitMQ is a message-queueing software also known as a message broker or queue manager. It is software where queues are defined, to which applications connect in order to transfer a messages
+
+Fill the below commands in user data during creation of EC2-instance / Manually run as a command
+
+#!/bin/bash
+sudo amazon-linux-extras install epel
+sudo yum update -y
+sudo yum install wget -y
+cd /tmp/
+sudo yum install rabbitmq-server
+sudo systemctl start rabbitmq-server
+sudo systemctl status rabbitmq-server
+sudo systemctl enable rabbitmq-server
+sudo sh -c 'echo "[{rabbit, [{loopback_users, []}]}]." > /etc/rabbitmq/rabbitmq.config'
+sudo rabbitmqctl add_user test test
+sudo rabbitmqctl set_user_tags test administrator
+sudo systemctl restart rabbitmq-server
+
+---------------------------------------------------------------------------------------------------------------------
+
+To get the userdata script on the instance 
+Run on that machine,
+curl http://169.254.169.254/latest/user-data
+
+----------------------------------------------------------------------------------------------------------------------------------------
+
+To find out the service running or not [By logging on to each Ec2-instance and try the following methods whether the script has worked or not]
+
+1st method is sudo systemctl status (servicename)
+2nd method is ss -tunlp | grep (port number of the service) //It is also used to check the traffic flow (i.e from anywhere / particular sg)
+
+-------------------------------------------------------------------------------------------------------------------------------------------
+
+Open the Route53 service
+
+1. Create a private hosted zone (To route between memchache, tomcat and rabbitmq)
+Example: vprofile.in and specify the region and VPC.
+
+2. Create a record - Database
+Record name - db01.
+Mention the private IP Address of that db instance in value field.
+
+3. Create a record - Memcache
+Record name - memcache
+Mention the private IP Address of that memcache instance in value field.
+
+4. Create a record - RabbitMQ
+Record name - rabbitmq
+Mention the private IP Address ofthe rabbitmq instance in value field.
+
+----------------------------------------------------------------------------------------------------------------------------------------------
+
+Modify the application properties file
+
+For DB
+jdbc.url=jdbc:mysql://db01.vprofile.in:3306/accounts?useUnicode=true&characterEncoding=UTF-8&zeroDateTimeBehavior=convertToNull
+		   [Name here above]
+
+For Memcache
+memcached.active.host=memcache.vprofile.in
+                  [Name here above]
+
+For RabbitMQ
+rabbitmq.address=rabbitmq.vprofile.in
+              [Name here above]
+
+--------------------------------------------------------------------------------------------------------------------------------------------------
+
+Build the source code from Apache Maven (Build Tool)
+
+Install the Apache Maven on local machine / EC2 instance
+Run the following commands
+
+To check the version
+mvn --version
+
+To clean / delete the old builds (optional)
+mvn clean
+
+To build the src
+mvn package
+
+Note: Since it's a web application, the target build will be in the format of war file
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a new bucket in S3 with unique name and upload the .war file to the bucket with public access permission
+
+Create a access token in the security credentials and download the .csv file
+Install the aws-cli on the tomcat machine
+
+Run,
+
+aws configure ( To identify which AWS account )
+Enter the Access key, Secret key, region and output format - json
+
+To create a new bucket through aws-cli
+aws s3 mb s3://(unique bucket name)
+
+To list s3 bucket in aws cli
+aws s3 ls
+
+To delete the bucket through aws-cli
+aws s3 rb s3://(exsisting bucket name)
+
+To copy the .war file from bucket through aws-cli 
+aws s3 cp s3://vprofile-shreyas/vprofile-v2.war /tmp/
+	        (Path of the bucket)
+
+---------------------------------------------------------------------------------------------------------------------------------------------------
+
+Copy the .war file to tomcat webapps directory
+
+1. Stop the tomcat service 
+sudo systemctl stop tomcat9
+
+2. Default path of tomcat directory is
+/var/lib/tomcat9/*
+ 
+3. Remove the ROOT directory
+rm -rf /var/lib/tomcat9/webapps/*
+
+4. Copy the .war file as ROOT.war in tomcat directory
+cp -R /tmp/vprofile-v2.war /var/lib/tomcat9/webapps/ROOT.war
+
+5. Restart the tomcat service
+sudo systemctl restart tomcat9
+
+Now you can access the application with the help of Tomcat IP address with 8080 port number
+If DNS has been purchased, you can route that r53 name servers in your Hosted DNS website (Ex: Big Daddy etc)
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
