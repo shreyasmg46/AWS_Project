@@ -1,5 +1,5 @@
 # AWS_Project
-A Multi-tier application deployed on AWS platform
+A Multi-tier Maven application deployed on AWS platform
 
 # Flow of Execution
 Login to AWS Account.
